@@ -4,17 +4,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BLE動作確認</title>
+  <title>BLEビーコン検知テスト</title>
+
   <style>
     body {
       font-family: sans-serif;
       padding: 20px;
       background: #f5f5f5;
     }
+
     button {
-      padding: 12px 20px;
+      padding: 12px 18px;
+      margin: 5px;
       font-size: 16px;
     }
+
     #result {
       background: white;
       padding: 15px;
@@ -25,54 +29,176 @@
     }
   </style>
 </head>
+
 <body>
 
-  <h2>BLEビーコン動作確認</h2>
+  <h2>BLEビーコン検知テスト</h2>
 
-  <p id="status">確認待ち</p>
+  <p id="status">待機中</p>
 
-  <button onclick="checkBLE()">BLE対応状況を確認</button>
+  <button id="start">スキャン開始</button>
+  <button id="stop" disabled>停止</button>
 
-  <div id="result">ここに確認結果が表示されます。</div>
+  <div id="result">検知結果がここに表示されます。</div>
 
   <script>
-    async function checkBLE() {
-      const result = document.getElementById("result");
-      const status = document.getElementById("status");
+    const status = document.getElementById("status");
+    const result = document.getElementById("result");
+    const startButton = document.getElementById("start");
+    const stopButton = document.getElementById("stop");
 
-      result.textContent = "";
-      status.textContent = "確認中...";
+    let scan = null;
+    let received = 0;
 
-      result.textContent +=
-        "HTTPS環境: " + window.isSecureContext + "\n";
-
-      result.textContent +=
-        "Bluetooth API: " +
-        ("bluetooth" in navigator) + "\n";
-
-      result.textContent +=
-        "BLE広告スキャンAPI: " +
-        (typeof navigator.bluetooth?.requestLEScan === "function")
-        + "\n";
-
-      if (!window.isSecureContext) {
-        result.textContent +=
-          "\nHTTPS環境ではありません。HTTPSで開いてください。";
-      }
-
-      if (!navigator.bluetooth) {
-        result.textContent +=
-          "\nWeb Bluetooth APIが利用できません。";
-      } else if (!navigator.bluetooth.requestLEScan) {
-        result.textContent +=
-          "\n広告スキャン機能が利用できません。";
-      } else {
-        result.textContent +=
-          "\nBLE広告スキャンAPIが見つかりました！";
-      }
-
-      status.textContent = "確認完了";
+    function show(text) {
+      result.textContent = text + "\n\n" + result.textContent;
     }
+
+    function toHex(bytes) {
+      return Array.from(bytes)
+        .map(b => b.toString(16).padStart(2, "0"))
+        .join("");
+    }
+
+    function parseIBeacon(bytes) {
+      if (
+        bytes.length < 23 ||
+        bytes[0] !== 0x02 ||
+        bytes[1] !== 0x15
+      ) {
+        return null;
+      }
+
+      const hex = toHex(bytes.slice(2, 18));
+
+      const uuid = [
+        hex.slice(0, 8),
+        hex.slice(8, 12),
+        hex.slice(12, 16),
+        hex.slice(16, 20),
+        hex.slice(20, 32)
+      ].join("-");
+
+      const major = (bytes[18] << 8) | bytes[19];
+      const minor = (bytes[20] << 8) | bytes[21];
+
+      const measuredPower =
+        bytes[22] > 127 ? bytes[22] - 256 : bytes[22];
+
+      return { uuid, major, minor, measuredPower };
+    }
+
+    function handleAdvertisement(event) {
+      received++;
+
+      const lines = [];
+
+      lines.push("検知回数: " + received);
+      lines.push("受信時刻: " + new Date().toLocaleTimeString());
+      lines.push("デバイス名: " + (event.device.name || "名前なし"));
+      lines.push("デバイスID: " + event.device.id);
+      lines.push("RSSI: " + event.rssi + " dBm");
+      lines.push("TX Power: " + (event.txPower ?? "取得なし"));
+
+      let foundIBeacon = false;
+
+      event.manufacturerData.forEach((data, companyId) => {
+        const bytes = new Uint8Array(
+          data.buffer,
+          data.byteOffset,
+          data.byteLength
+        );
+
+        lines.push("");
+        lines.push(
+          "Manufacturer ID: 0x" +
+          companyId.toString(16).padStart(4, "0")
+        );
+        lines.push("広告データ: " + toHex(bytes));
+
+        if (companyId === 0x004C) {
+          const beacon = parseIBeacon(bytes);
+
+          if (beacon) {
+            foundIBeacon = true;
+            lines.push("--- iBeacon情報 ---");
+            lines.push("UUID: " + beacon.uuid);
+            lines.push("Major: " + beacon.major);
+            lines.push("Minor: " + beacon.minor);
+            lines.push(
+              "測定電力: " + beacon.measuredPower + " dBm"
+            );
+          }
+        }
+      });
+
+      if (!foundIBeacon) {
+        lines.push("");
+        lines.push("iBeacon形式のデータは未確認");
+      }
+
+      show(lines.join("\n"));
+    }
+
+    async function startScan() {
+      if (!navigator.bluetooth ||
+          !navigator.bluetooth.requestLEScan) {
+        status.textContent = "BLE広告スキャンに対応していません";
+        return;
+      }
+
+      received = 0;
+      result.textContent = "ビーコンからの広告を待っています...";
+
+      navigator.bluetooth.removeEventListener(
+        "advertisementreceived",
+        handleAdvertisement
+      );
+
+      navigator.bluetooth.addEventListener(
+        "advertisementreceived",
+        handleAdvertisement
+      );
+
+      try {
+        scan = await navigator.bluetooth.requestLEScan({
+          acceptAllAdvertisements: true,
+          keepRepeatedDevices: true
+        });
+
+        status.textContent = "スキャン中...";
+        startButton.disabled = true;
+        stopButton.disabled = false;
+
+      } catch (error) {
+        status.textContent = "スキャン開始に失敗しました";
+        show(error.name + ": " + error.message);
+
+        navigator.bluetooth.removeEventListener(
+          "advertisementreceived",
+          handleAdvertisement
+        );
+      }
+    }
+
+    function stopScan() {
+      if (scan) {
+        scan.stop();
+        scan = null;
+      }
+
+      navigator.bluetooth?.removeEventListener(
+        "advertisementreceived",
+        handleAdvertisement
+      );
+
+      status.textContent = "スキャン停止";
+      startButton.disabled = false;
+      stopButton.disabled = true;
+    }
+
+    startButton.addEventListener("click", startScan);
+    stopButton.addEventListener("click", stopScan);
   </script>
 
 </body>
