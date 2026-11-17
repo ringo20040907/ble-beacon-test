@@ -13,19 +13,39 @@
       background: #f5f5f5;
     }
 
+    h2 {
+      color: #333;
+    }
+
     button {
       padding: 12px 18px;
-      margin: 5px;
+      margin: 5px 5px 5px 0;
       font-size: 16px;
+      border: none;
+      border-radius: 6px;
+      background: #2878c8;
+      color: white;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      background: #aaa;
+      cursor: not-allowed;
+    }
+
+    #status {
+      font-weight: bold;
+      margin-top: 20px;
     }
 
     #result {
       background: white;
       padding: 15px;
-      margin-top: 20px;
+      margin-top: 15px;
       border-radius: 8px;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+      line-height: 1.7;
     }
   </style>
 </head>
@@ -39,28 +59,32 @@
   <button id="start">スキャン開始</button>
   <button id="stop" disabled>停止</button>
 
-  <div id="result">検知結果がここに表示されます。</div>
+  <div id="result">
+    iBeaconの検知結果がここに表示されます。
+  </div>
 
   <script>
+
     const status = document.getElementById("status");
     const result = document.getElementById("result");
+
     const startButton = document.getElementById("start");
     const stopButton = document.getElementById("stop");
 
     let scan = null;
     let received = 0;
 
-    function show(text) {
-      result.textContent = text + "\n\n" + result.textContent;
-    }
 
-    function toHex(bytes) {
-      return Array.from(bytes)
-        .map(b => b.toString(16).padStart(2, "0"))
-        .join("");
-    }
+    // iBeaconのデータを解析する
+    function parseIBeacon(data) {
 
-    function parseIBeacon(bytes) {
+      const bytes = new Uint8Array(
+        data.buffer,
+        data.byteOffset,
+        data.byteLength
+      );
+
+      // iBeacon形式か確認
       if (
         bytes.length < 23 ||
         bytes[0] !== 0x02 ||
@@ -69,7 +93,10 @@
         return null;
       }
 
-      const hex = toHex(bytes.slice(2, 18));
+      // UUIDを取得
+      const hex = Array.from(bytes.slice(2, 18))
+        .map(b => b.toString(16).padStart(2, "0"))
+        .join("");
 
       const uuid = [
         hex.slice(0, 8),
@@ -79,100 +106,129 @@
         hex.slice(20, 32)
       ].join("-");
 
-      const major = (bytes[18] << 8) | bytes[19];
-      const minor = (bytes[20] << 8) | bytes[21];
+      // Majorを取得
+      const major =
+        (bytes[18] << 8) | bytes[19];
 
+      // Minorを取得
+      const minor =
+        (bytes[20] << 8) | bytes[21];
+
+      // iBeaconの測定電力
       const measuredPower =
-        bytes[22] > 127 ? bytes[22] - 256 : bytes[22];
+        bytes[22] > 127
+          ? bytes[22] - 256
+          : bytes[22];
 
-      return { uuid, major, minor, measuredPower };
+      return {
+        uuid,
+        major,
+        minor,
+        measuredPower
+      };
     }
 
+
+    // iBeaconを検知したときの処理
     function handleAdvertisement(event) {
-      received++;
 
-      const lines = [];
+      // AppleのManufacturer IDを取得
+      const data = event.manufacturerData.get(0x004C);
 
-      lines.push("検知回数: " + received);
-      lines.push("受信時刻: " + new Date().toLocaleTimeString());
-      lines.push("デバイス名: " + (event.device.name || "名前なし"));
-      lines.push("デバイスID: " + event.device.id);
-      lines.push("RSSI: " + event.rssi + " dBm");
-      lines.push("TX Power: " + (event.txPower ?? "取得なし"));
-
-      let foundIBeacon = false;
-
-      event.manufacturerData.forEach((data, companyId) => {
-        const bytes = new Uint8Array(
-          data.buffer,
-          data.byteOffset,
-          data.byteLength
-        );
-
-        lines.push("");
-        lines.push(
-          "Manufacturer ID: 0x" +
-          companyId.toString(16).padStart(4, "0")
-        );
-        lines.push("広告データ: " + toHex(bytes));
-
-        if (companyId === 0x004C) {
-          const beacon = parseIBeacon(bytes);
-
-          if (beacon) {
-            foundIBeacon = true;
-            lines.push("--- iBeacon情報 ---");
-            lines.push("UUID: " + beacon.uuid);
-            lines.push("Major: " + beacon.major);
-            lines.push("Minor: " + beacon.minor);
-            lines.push(
-              "測定電力: " + beacon.measuredPower + " dBm"
-            );
-          }
-        }
-      });
-
-      if (!foundIBeacon) {
-        lines.push("");
-        lines.push("iBeacon形式のデータは未確認");
-      }
-
-      show(lines.join("\n"));
-    }
-
-    async function startScan() {
-      if (!navigator.bluetooth ||
-          !navigator.bluetooth.requestLEScan) {
-        status.textContent = "BLE広告スキャンに対応していません";
+      if (!data) {
         return;
       }
 
-      received = 0;
-      result.textContent = "ビーコンからの広告を待っています...";
+      // iBeaconデータを解析
+      const beacon = parseIBeacon(data);
 
+      if (!beacon) {
+        return;
+      }
+
+      received++;
+
+      // 最新の検知結果だけを表示
+      status.textContent = "iBeaconを検知しています！";
+
+      result.textContent =
+        "【iBeacon検知成功】\n\n" +
+
+        "検知回数: " + received + "\n" +
+
+        "デバイス名: " +
+        (event.device.name || "名前なし") + "\n" +
+
+        "RSSI: " + event.rssi + " dBm\n\n" +
+
+        "UUID: " + beacon.uuid + "\n" +
+
+        "Major: " + beacon.major + "\n" +
+
+        "Minor: " + beacon.minor + "\n" +
+
+        "測定電力: " +
+        beacon.measuredPower + " dBm\n\n" +
+
+        "受信時刻: " +
+        new Date().toLocaleTimeString();
+    }
+
+
+    // スキャンを開始する
+    async function startScan() {
+
+      if (!window.isSecureContext) {
+        status.textContent = "HTTPS環境が必要です。";
+        return;
+      }
+
+      if (
+        !navigator.bluetooth ||
+        !navigator.bluetooth.requestLEScan
+      ) {
+        status.textContent =
+          "BLE広告スキャンに対応していません。";
+        return;
+      }
+
+      // 前回のイベント登録を解除
       navigator.bluetooth.removeEventListener(
         "advertisementreceived",
         handleAdvertisement
       );
 
+      received = 0;
+
+      result.textContent =
+        "iBeaconからの広告を待っています...";
+
+      // 広告受信イベントを登録
       navigator.bluetooth.addEventListener(
         "advertisementreceived",
         handleAdvertisement
       );
 
       try {
+
+        // BLE広告スキャン開始
         scan = await navigator.bluetooth.requestLEScan({
           acceptAllAdvertisements: true,
           keepRepeatedDevices: true
         });
 
-        status.textContent = "スキャン中...";
+        status.textContent =
+          "スキャン中... iBeaconを探しています。";
+
         startButton.disabled = true;
         stopButton.disabled = false;
 
       } catch (error) {
-        status.textContent = "スキャン開始に失敗しました";
-        show(error.name + ": " + error.message);
+
+        status.textContent = "スキャン開始に失敗しました。";
+
+        result.textContent =
+          error.name + "\n" + error.message;
 
         navigator.bluetooth.removeEventListener(
           "advertisementreceived",
@@ -181,7 +237,10 @@
       }
     }
 
+
+    // スキャンを停止する
     function stopScan() {
+
       if (scan) {
         scan.stop();
         scan = null;
@@ -193,12 +252,23 @@
       );
 
       status.textContent = "スキャン停止";
+
       startButton.disabled = false;
       stopButton.disabled = true;
     }
 
-    startButton.addEventListener("click", startScan);
-    stopButton.addEventListener("click", stopScan);
+
+    // ボタンのイベント設定
+    startButton.addEventListener(
+      "click",
+      startScan
+    );
+
+    stopButton.addEventListener(
+      "click",
+      stopScan
+    );
+
   </script>
 
 </body>
